@@ -1,0 +1,246 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 13,
+      "metadata": {
+        "description": "VM naming prefix, also used for each new resource created. 3-char min, 13-char max, lowercase alphanumeric"
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vmCount": {
+      "type": "int",
+      "minValue": 1,
+      "metadata": {
+        "description": "Number of VMs to be deployed (Min=1)"
+      }
+    },
+    "windowsOSVersion": {
+      "type": "string",
+      "allowedValues": [
+        "2008-R2-SP1",
+        "2012-R2-Datacenter",
+        "2016-Datacenter"
+      ],
+      "metadata": {
+        "description": "The Windows version for the VM. This will pick a fully patched image of this given Windows version. Allowed values: 2008-R2-SP1, 2012-Datacenter, 2012-R2-Datacenter."
+      }
+    },
+    "workloadTag": {
+      "type": "string",
+      "metadata": {
+        "description": "Workload description tag to assign to VMs"
+      }
+    },
+    "environmentTag": {
+      "type": "string",
+      "metadata": {
+        "description": "Environment name tag to assign to VMs"
+      }
+    },
+    "vmDataDiskSize": {
+      "type": "int",
+      "minValue": 128,
+      "maxValue": 1023,
+      "metadata": {
+        "description": "Size of each data disk in GB on each S2D VM (Min=128, Max=1023)"
+      },
+      "defaultValue": 1023
+    },
+    "localAdminUsername": {
+      "type": "string",
+      "minLength": 1,
+      "metadata": {
+        "description": "Local Administrator username on all VMs"
+      }
+    },
+    "localAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Local Administrator password on all VMs"
+      }
+    }
+  },
+  "variables": {
+    "vmNamePrefix": "[tolower(parameters('namePrefix'))]",
+    "vmNamePrefixInfix": "[replace(variables('vmNamePrefix'), '-', '')]",
+    "availabilitySetName": "[concat(variables('vmNamePrefixInfix'), '-as')]",
+    "storageAccountType": "Standard_LRS",
+    "timeZone": "Eastern Standard Time",
+    "imageReference": {
+      "publisher": "MicrosoftWindowsServer",
+      "offer": "WindowsServer",
+      "sku": "[parameters('windowsOSVersion')]",
+      "version": "latest"
+    },
+    "virtualNetworkName": "vNet0",
+    "addressPrefix": "10.0.0.0/16",
+    "subnetName": "Subnet0",
+    "subnetPrefix": "10.0.0.0/24",
+    "subnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), variables('subnetName'))]",
+    "availsetApi": "2016-04-30-preview",
+    "storageApi": "2016-01-01",
+    "resourcesApi": "2016-09-01",
+    "computeApi": "2016-04-30-preview",
+    "networkApi": "2016-03-30",
+    "resourceApi": "2015-01-01"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Compute/availabilitySets",
+      "name": "[variables('availabilitySetName')]",
+      "apiVersion": "[variables('availsetApi')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "platformFaultDomainCount": 3,
+        "platformUpdateDomainCount": "[add(parameters('vmCount'), 2)]",
+        "managed": true
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[concat(variables('vmNamePrefixInfix'), copyindex(), '-pip0')]",
+      "apiVersion": "[variables('networkApi')]",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "pipLoop",
+        "count": "[parameters('vmCount')]"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(variables('vmNamePrefixInfix'), copyindex(), 'public')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[variables('virtualNetworkName')]",
+      "apiVersion": "2016-03-30",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "[concat(variables('vmNamePrefixInfix'), copyindex(), '-nic0')]",
+      "apiVersion": "[variables('networkApi')]",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "nicLoop",
+        "count": "[parameters('vmCount')]"
+      },
+      "dependsOn": [
+        "pipLoop",
+        "[resourceId('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "[concat(variables('vmNamePrefixInfix'), copyIndex(), '-ip0')]",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('vmNamePrefixInfix'), copyindex(), '-pip0'))]"
+              },
+              "subnet": {
+                "id": "[variables('subnetRef')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[concat(variables('vmNamePrefix'), copyIndex())]",
+      "apiVersion": "[variables('computeApi')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "Resource Type": "Virtual Machine",
+        "Workload": "[parameters('workloadTag')]",
+        "Environment": "[parameters('environmentTag')]"
+      },
+      "copy": {
+        "name": "virtualMachineLoop",
+        "count": "[parameters('vmCount')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]",
+        "nicLoop"
+      ],
+      "properties": {
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]"
+        },
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('vmNamePrefix'), copyIndex())]",
+          "adminUsername": "[parameters('localAdminUsername')]",
+          "adminPassword": "[parameters('localAdminPassword')]",
+          "windowsConfiguration": {
+            "enableAutomaticUpdates": true,
+            "timeZone": "[variables('timeZone')]"
+          }
+        },
+        "storageProfile": {
+          "imageReference": "[variables('imageReference')]",
+          "osDisk": {
+            "name": "[concat(variables('vmNamePrefixInfix'), copyIndex(), '-osdisk')]",
+            "createOption": "FromImage",
+            "caching": "ReadWrite",
+            "managedDisk": {
+              "storageAccountType": "[variables('storageAccountType')]"
+            }
+          },
+          "dataDisks": [
+            {
+              "lun": 1,
+              "name": "[concat(variables('vmNamePrefixInfix'), copyindex(), '-data0')]",
+              "createOption": "Empty",
+              "caching": "None",
+              "diskSizeGB": "[parameters('vmDataDiskSize')]",
+              "managedDisk": {
+                "storageAccountType": "[variables('storageAccountType')]"
+              }
+            }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('vmNamePrefixInfix'), copyIndex(), '-nic0'))]"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "hostname": {
+      "type": "string",
+      "value": "[variables('virtualNetworkName')]"
+    }
+  }
+}
